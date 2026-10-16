@@ -1,0 +1,13 @@
+{
+  "graph": "random",
+  "epochs_run": 46,
+  "best_epoch": 37,
+  "batch": 64,
+  "lr": 0.001,
+  "patience": 8,
+  "seed": 42,
+  "inputs": [
+    "speed_z (0 si manquant)",
+    "time_of_day"
+  ]
+}
