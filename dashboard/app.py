@@ -1,4 +1,5 @@
-"""Dashboard DSO 4 : propagation de la congestion sur METR-LA (période de VALIDATION uniquement).
+"""Dashboard DSO 4 : propagation de la congestion (période de VALIDATION uniquement), METR-LA ou PEMS08.
+PEMS08 : définir DSO4_DATASET=pems08 avant de lancer (ou run_dashboard_pems08.bat).
 Lancement depuis la racine : streamlit run dashboard/app.py
 Prérequis : python -m src.precompute_val (crée results/dashboard/val_preds.npz)."""
 import os
@@ -16,8 +17,11 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 from agent.core import HEAVY, MODEL_KEYS, MODERATE, STEPS, TrafficAgent, alert_quality, load  # noqa: E402
+from src.data import DATASETS, active_dataset, results_dir  # noqa: E402
 
-st.set_page_config(page_title="DSO4 · Agent trafic METR-LA", layout="wide")
+DS = DATASETS[active_dataset()]
+RES = results_dir()
+st.set_page_config(page_title=f"DSO4 · Agent trafic {DS['label']}", layout="wide")
 HZ = list(STEPS)
 
 
@@ -29,6 +33,9 @@ def get_agent():
 
 @st.cache_data
 def get_locations(sensor_ids):
+    if not DS["gps"]:  # PEMS08 : pas de coordonnées, schéma calculé depuis les distances du graphe
+        from src.data import schematic_layout
+        return schematic_layout(DS["adj"], len(sensor_ids))
     loc = pd.read_csv("data/graph_sensor_locations.csv")
     loc["sensor_id"] = loc["sensor_id"].astype(str)
     return loc.set_index("sensor_id").loc[list(sensor_ids)].reset_index()
@@ -36,17 +43,17 @@ def get_locations(sensor_ids):
 
 @st.cache_data
 def get_results():
-    base = pd.read_csv("results/baselines_val.csv")
+    base = pd.read_csv(f"{RES}/baselines_val.csv")
     tags = ("LightGBM", "LightGBM_randomGraph", "LightGBM_noNeighbors",
             "GraphWaveNet", "GraphWaveNet_randomGraph", "GraphWaveNet_adaptiveGraph")
-    lg = pd.concat([pd.read_csv(f"results/{t}_val.csv") for t in tags if os.path.exists(f"results/{t}_val.csv")])
+    lg = pd.concat([pd.read_csv(f"{RES}/{t}_val.csv") for t in tags if os.path.exists(f"{RES}/{t}_val.csv")])
     res = pd.concat([base, lg])[["model", "horizon", "MAE", "RMSE", "MAPE"]]
     names = {"LightGBM": "LightGBM · vrai graphe", "LightGBM_randomGraph": "LightGBM · graphe aléatoire",
              "LightGBM_noNeighbors": "LightGBM · sans voisins", "GraphWaveNet": "Graph WaveNet · vrai graphe",
              "GraphWaveNet_randomGraph": "Graph WaveNet · graphe aléatoire",
              "GraphWaveNet_adaptiveGraph": "Graph WaveNet · graphe appris seul"}
     res["model"] = res["model"].replace(names)
-    shap = pd.read_csv("results/LightGBM_shap_val.csv", index_col=0)
+    shap = pd.read_csv(f"{RES}/LightGBM_shap_val.csv", index_col=0)
     return res, shap
 
 
@@ -55,11 +62,11 @@ def get_shap_inputs():
     """Tout ce qu'il faut pour recalculer les features d'un instant val (TreeSHAP local)."""
     import lightgbm as lgb
     from src.baselines import HistoricalAverage
-    from src.data import chrono_split, load_metr_la, time_features
+    from src.data import dataset_splits, load_dataset, time_features
     from src.features import neighbor_mats
-    df, adj, _ = load_metr_la("data/metr-la.h5", "data/adj_mx.pkl")
+    df, adj, _ = load_dataset(active_dataset())
     values = df.values.astype(np.float64)
-    tr = chrono_split(len(values))[0]
+    tr = dataset_splits(active_dataset(), len(values))[0]
     slot, dow = time_features(df.index)
 
     class FullHA:  # en val, la feature HA = HA du train complet (identique à OOFHistoricalAverage.predict)
@@ -68,7 +75,7 @@ def get_shap_inputs():
         def predict(self, y, s, d, w=None):
             return self.full.predict_at(s[y], d[y])
 
-    models = {h: lgb.Booster(model_file=f"results/models/LightGBM_{h}.txt") for h in HZ}
+    models = {h: lgb.Booster(model_file=f"{RES}/models/LightGBM_{h}.txt") for h in HZ}
     A_up, A_down = neighbor_mats(adj)
     return values, slot, dow, FullHA(), A_up, A_down, models
 
@@ -89,15 +96,21 @@ loc = get_locations(tuple(sids))
 ff = d["ha_free_flow"]
 
 # ---------------- barre latérale ----------------
-st.sidebar.title("Agent trafic · METR-LA")
-st.sidebar.caption("Rejoué sur la **validation** (23 mai → 4 juin 2012). Le test reste verrouillé.")
+st.sidebar.title(f"Agent trafic · {DS['label']}")
+st.sidebar.caption(f"Rejoué sur la **validation** ({times[0]:%d/%m} → {times[-1]:%d/%m/%Y}). Le test reste verrouillé."
+                   + ("" if DS["gps"] else " Dates PEMS08 supposées (début 01/07/2016)."))
 if "i" not in st.session_state:
     # démarre sur l'instant de la val où le plus de capteurs sont congestionnés (pointe réelle)
     st.session_state.i = int(np.argmax(np.nansum(np.where(d["current"] > 0, d["current"] / d["ha_free_flow"], np.nan)
                                                  < HEAVY, axis=1)))
 hname = st.sidebar.radio("Horizon de prévision", HZ, index=1, horizontal=True)
-tiles = st.sidebar.radio("Fond de carte", ["Plan OpenStreetMap", "Sans fond (si la carte reste blanche)"],
-                         help="Le plan demande WebGL2 + internet. Le mode sans fond marche partout.")
+if DS["gps"]:
+    tiles = st.sidebar.radio("Fond de carte", ["Plan OpenStreetMap", "Sans fond (si la carte reste blanche)"],
+                             help="Le plan demande WebGL2 + internet. Le mode sans fond marche partout.")
+else:
+    tiles = "Sans fond"
+    st.sidebar.caption("PEMS08 n'a pas de GPS : les « cartes » sont un **schéma du réseau** calculé à partir des "
+                       "distances entre capteurs voisins, pas une vraie carte.")
 st.sidebar.divider()
 st.sidebar.subheader("Onglets détaillés")
 labels = times.strftime("%a %d/%m %H:%M").tolist()
@@ -130,13 +143,20 @@ truth = d["true"][i, k]
 past_alerts = [a for a in agent.alerts if pd.Timestamp(a.time) <= t0]
 alerts_now = [a for a in past_alerts if pd.Timestamp(a.time) > t0 - pd.Timedelta(minutes=30)]
 
-st.title("Agent de prévision des bouchons · Los Angeles (METR-LA)")
-tab_demo, tab_prop, tab_map, tab_agent, tab_sensor, tab_res = st.tabs(
-    ["🎬 Démo", "🌊 Propagation", "🗺️ Carte détaillée", "🤖 Agent", "📈 Capteur + SHAP", "📊 Résultats"])
+st.title(f"Agent de prévision des bouchons · {DS['city']} ({DS['label']})")
+HAS_GF = "gf_pred_occ15" in d   # PEMS08 avec les sorties GO-FLOW (tools/export_goflow.py)
+tabs = st.tabs(["🎬 Démo"] + (["🤝 GO-FLOW → DSO4"] if HAS_GF else []) +
+               ["🌊 Propagation", "🗺️ Carte détaillée", "🤖 Agent", "📈 Capteur + SHAP", "📊 Résultats"])
+tab_demo, (tab_prop, tab_map, tab_agent, tab_sensor, tab_res) = tabs[0], tabs[-5:]
 
 with tab_demo:
     from dashboard import demo
     demo.render(d, agent, loc, hname, TILES)
+
+if HAS_GF:
+    with tabs[1]:
+        from dashboard import goflow_tab
+        goflow_tab.render(d, adj, agent, hname, i)
 
 with tab_prop:
     from dashboard import propagation_tab
@@ -192,7 +212,7 @@ with tab_map:
             fig = fn(df_map, color=col, color_continuous_scale="RdYlGn", range_color=(10, 70), **kw)
         fig.update_traces(marker=dict(size=11))
         if show_edges:
-            A = (adj > 0.5) & ~np.eye(len(adj), dtype=bool)
+            A = (adj > (0.5 if DS["gps"] else 0)) & ~np.eye(len(adj), dtype=bool)
             lat, lon = [], []
             for a, b in zip(*np.nonzero(A)):
                 lat += [loc.latitude[a], loc.latitude[b], None]; lon += [loc.longitude[a], loc.longitude[b], None]
@@ -217,9 +237,9 @@ with tab_map:
     is_level = color_by.startswith("Niveau")
     cA, cB = st.columns(2)
     cA.plotly_chart(make_map("niveau maintenant" if is_level else "observé maintenant",
-                             f"Observé à t0 ({t0:%H:%M})", is_level), use_container_width=True)
+                             f"Observé à t0 ({t0:%H:%M})", is_level), width="stretch")
     cB.plotly_chart(make_map("niveau prédit" if is_level else "prédit",
-                             f"Prédit à +{hname} par l'agent ({used[hname]})", is_level), use_container_width=True)
+                             f"Prédit à +{hname} par l'agent ({used[hname]})", is_level), width="stretch")
     st.caption("Cercles violets = capteurs en alerte (30 dernières min). Trait violet = propagation depuis un voisin "
                f"déjà congestionné. Niveau = vitesse / vitesse fluide du capteur : congestion < {HEAVY:.0%}, "
                f"ralenti < {MODERATE:.0%}.")
@@ -245,7 +265,7 @@ with tab_agent:
                   labels={"value": "MAE glissante (mph)", "variable": ""},
                   title=f"Auto-évaluation sur les 24 dernières heures (+{hname})")
     fig.update_layout(margin=dict(l=0, r=0, t=40, b=0))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.subheader("Flux d'alertes")
     show = past_alerts[-40:][::-1]
@@ -256,7 +276,7 @@ with tab_agent:
             capteur=sids[a.sensor], horizon=a.horizon, **{"vitesse prédite": round(a.pred_speed, 1),
                                                          "vitesse fluide": round(a.free_flow, 1)},
             voisin_congestionné=sids[a.source] if a.source >= 0 else "", modèle=a.model, action=a.action)
-            for a in show]), use_container_width=True, hide_index=True)
+            for a in show]), width="stretch", hide_index=True)
     else:
         st.info("Aucune alerte avant cet instant.")
     q = alert_quality(past_alerts)
@@ -282,7 +302,7 @@ with tab_sensor:
                   title=f"Capteur {sids[s]} : prédictions à +{hname} sur les 12 dernières heures")
     fig.add_hline(y=HEAVY * ff[s], line_dash="dot", line_color="#d62728", annotation_text="seuil congestion")
     fig.update_layout(margin=dict(l=0, r=0, t=40, b=0))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.subheader(f"Pourquoi cette prédiction ? (TreeSHAP local, capteur {sids[s]}, +{hname})")
     try:
@@ -294,7 +314,7 @@ with tab_sensor:
                                marker_color=["#2ca02c" if v > 0 else "#d62728" for v in top.values]))
         fig.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=0),
                           xaxis_title=f"contribution (mph) · valeur moyenne {base:.1f} → prédiction {base + contrib.sum():.1f}")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         neigh = contrib[[c for c in contrib.index if c.startswith(("up_", "down_"))]].sum()
         st.caption(f"Contribution totale des voisins amont/aval : {neigh:+.2f} mph. "
                    "Note : LightGBM vrai graphe (pas le repli HA).")
@@ -338,9 +358,9 @@ with tab_res:
                  height=420, color_discrete_sequence=["#bdbdbd", "#8d99ae", "#ffb703", "#fb8500", "#219ebc",
                                                      "#cdb4db", "#9d4edd", "#5a189a"])
     fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), legend_title="")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.dataframe(res.pivot_table(index="model", columns="horizon", values="MAE", observed=True).round(3),
-                 use_container_width=True)
+                 width="stretch")
     st.caption("LightGBM : vrai graphe < graphe aléatoire < sans voisins à chaque horizon, donc les voisins routiers "
                "réels apportent un gain faible mais constant. Graph WaveNet (diffusion sur le graphe + graphe appris) "
                "fait mieux que LightGBM aux 3 horizons, et son vrai graphe bat aussi un graphe aléatoire de même "
@@ -351,7 +371,7 @@ with tab_res:
     fig = px.bar(sh, orientation="h", height=450, labels={"value": "mean |SHAP| (mph)", "index": ""})
     fig.update_traces(marker_color=["#fb8500" if n.startswith(("up_", "down_")) else "#219ebc" for n in sh.index])
     fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.caption("Orange = features des voisins (amont/aval).")
 
 if play and i < len(times) - 1:

@@ -1,0 +1,110 @@
+{
+  "dataset": "PEMS08",
+  "repository": "Davidham3/ASTGCN-2019-mxnet",
+  "commit": "d5d40645fa45471f2b473fc49a29ec3f0a993c6d",
+  "downloaded_at_utc": "2026-10-13T17:30:55.220065+00:00",
+  "configuration_url": "https://raw.githubusercontent.com/Davidham3/ASTGCN-2019-mxnet/d5d40645fa45471f2b473fc49a29ec3f0a993c6d/configurations/PEMS08.conf",
+  "loader_url": "https://raw.githubusercontent.com/Davidham3/ASTGCN-2019-mxnet/d5d40645fa45471f2b473fc49a29ec3f0a993c6d/lib/utils.py",
+  "configuration": "[Data]\r\nadj_filename = data/PEMS08/distance.csv\r\ngraph_signal_matrix_filename = data/PEMS08/pems08.npz\r\nnum_of_vertices = 170\r\npoints_per_hour = 12\r\nnum_for_predict = 12\r\n\r\n[Training]\r\nmodel_name = ASTGCN\r\nctx = gpu-1\r\noptimizer = adam\r\nlearning_rate = 0.001\r\nepochs = 200\r\nbatch_size = 16\r\nnum_of_weeks = 1\r\nnum_of_days = 1\r\nnum_of_hours = 3\r\nK = 3\r\nmerge = 0\r\nprediction_filename = ASTGCN_prediction_08\r\nparams_dir = experiment2",
+  "id_semantics": "npz_index",
+  "evidence": "La configuration de cette révision associe ces deux fichiers à PEMS08 (170 sommets). Le chargeur des auteurs utilise les IDs entiers des arêtes directement comme indices A[i,j], sans remapping.",
+  "files": {
+    "distance.csv": {
+      "url": "https://raw.githubusercontent.com/Davidham3/ASTGCN-2019-mxnet/d5d40645fa45471f2b473fc49a29ec3f0a993c6d/data/PEMS08/distance.csv",
+      "bytes": 4032,
+      "sha256": "859d68e7583ed4e6016588eaaca494d3ece286dae361614c5c1833017f87eaa7"
+    },
+    "pems08.npz": {
+      "url": "https://raw.githubusercontent.com/Davidham3/ASTGCN-2019-mxnet/d5d40645fa45471f2b473fc49a29ec3f0a993c6d/data/PEMS08/pems08.npz",
+      "bytes": 18525419,
+      "sha256": "e1d03ce74e9fb79149e6e7c37c680214822c4a285baa2f42278cacabcd25c075"
+    }
+  },
+  "source_url": "https://github.com/Davidham3/ASTGCN-2019-mxnet/tree/d5d40645fa45471f2b473fc49a29ec3f0a993c6d/data/PEMS08",
+  "distance_sha256": "859d68e7583ed4e6016588eaaca494d3ece286dae361614c5c1833017f87eaa7",
+  "npz_sha256": "e1d03ce74e9fb79149e6e7c37c680214822c4a285baa2f42278cacabcd25c075",
+  "validation": {
+    "conclusion": "B. Vrais fichiers PEMS08 récupérés mais mapping encore incertain pour les séries identiques.",
+    "npz_keys_shapes": {
+      "data": [
+        17856,
+        170,
+        3
+      ]
+    },
+    "npz_key": "data",
+    "axes_time_sensor_feature": [
+      0,
+      1,
+      2
+    ],
+    "feature_to_npz_channel": {
+      "flow": 0,
+      "occupy": 1,
+      "speed": 2
+    },
+    "csv_sha256": "7bcc4a2161229a4b5187bd727c1e63f989aa193301d6773137bd4a59e1680293",
+    "rtol": 1e-05,
+    "atol": 1e-06,
+    "all_170_full_series_match": true,
+    "unique_sensor_series": false,
+    "unique_series_count": 149,
+    "duplicate_sensor_groups": [
+      [
+        48,
+        61,
+        80,
+        121,
+        122,
+        123,
+        141,
+        142
+      ],
+      [
+        50,
+        51,
+        74,
+        75,
+        90,
+        91,
+        115,
+        131
+      ],
+      [
+        55,
+        70,
+        73,
+        81,
+        83,
+        84,
+        159
+      ],
+      [
+        62,
+        109
+      ]
+    ],
+    "uniquely_identifiable_sensor_count": 145,
+    "max_absolute_error": 9.8879238130678e-17,
+    "edge_columns": [
+      "from",
+      "to",
+      "cost"
+    ],
+    "edge_count": 295,
+    "distinct_edge_nodes": 170,
+    "id_min": 0,
+    "id_max": 169,
+    "nodes_absent_from_edges": [],
+    "distance_statistics": {
+      "count": 295.0,
+      "mean": 315.8952542372881,
+      "std": 216.68663911103948,
+      "min": 6.3,
+      "25%": 240.3,
+      "50%": 328.1,
+      "75%": 372.15,
+      "max": 3274.4
+    }
+  }
+}

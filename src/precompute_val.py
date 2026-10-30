@@ -1,6 +1,6 @@
 """Précalcule, sur la VALIDATION uniquement, les prédictions utilisées par le dashboard et l'agent :
 LightGBM (vrai graphe), Historical Average, LastValue, vérité terrain, pour 15/30/60 min.
-Le test n'est jamais lu. Usage : python -m src.precompute_val"""
+Le test n'est jamais lu. Usage : python -m src.precompute_val [--dataset metr-la|pems08]"""
 import os
 import warnings
 
@@ -8,7 +8,7 @@ import lightgbm as lgb
 import numpy as np
 
 from src.baselines import HistoricalAverage, last_value
-from src.data import chrono_split, load_metr_la, make_windows, time_features, window_anchors
+from src.data import DATASETS, dataset_splits, load_dataset, make_windows, time_features, window_anchors
 from src.features import OOFHistoricalAverage, build_features, neighbor_mats
 from src.leakage import check_splits, check_windows
 from src.metrics import HORIZONS, masked_metrics
@@ -16,14 +16,16 @@ from src.metrics import HORIZONS, masked_metrics
 N_IN, N_OUT = 12, 12
 
 
-def main(h5="data/metr-la.h5", adj_path="data/adj_mx.pkl", models_dir="results/models",
-         out="results/dashboard/val_preds.npz"):
+def main(dataset="metr-la", h5=None, adj_path=None, models_dir=None, out=None):
+    res = DATASETS[dataset]["out"]
+    models_dir = models_dir or os.path.join(res, "models")
+    out = out or os.path.join(res, "dashboard", "val_preds.npz")
     warnings.filterwarnings("ignore", category=RuntimeWarning)
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    df, adj, sensor_ids = load_metr_la(h5, adj_path)
+    df, adj, sensor_ids = load_dataset(dataset, h5, adj_path)
     values = df.values.astype(np.float64)
     T, N = values.shape
-    splits = chrono_split(T); check_splits(splits, T)
+    splits = dataset_splits(dataset, T); check_splits(splits, T)
     tr, va = splits[0], splits[1]
     slot, dow = time_features(df.index)
     week = np.arange(T) // (7 * 288)
@@ -42,7 +44,7 @@ def main(h5="data/metr-la.h5", adj_path="data/adj_mx.pkl", models_dir="results/m
         F, _ = build_features(Xva, xi_va, h, slot, dow, ha_feat, A_up, A_down, True)
         lgbm[:, k] = model.predict(F).reshape(S, N)
         m = masked_metrics(lgbm[:, k].astype(np.float64), Yva[:, h - 1])
-        print(f"LightGBM {hname} val MAE={m['MAE']:.3f} (doit correspondre à results/LightGBM_val.csv)")
+        print(f"LightGBM {hname} val MAE={m['MAE']:.3f} (doit correspondre à {res}/LightGBM_val.csv)")
     true = np.stack([Yva[:, h - 1] for h in hs], 1).astype(np.float32)
     ha_pred = np.stack([ha.predict(yi_va, slot, dow)[:, h - 1] for h in hs], 1).astype(np.float32)
     lv, _ = last_value(Xva, ha.sensor)
@@ -55,6 +57,24 @@ def main(h5="data/metr-la.h5", adj_path="data/adj_mx.pkl", models_dir="results/m
         extra["gwn"] = np.stack([g[:, h - 1] for h in hs], 1).astype(np.float32)
         for k, hname in enumerate(HORIZONS):
             print(f"GraphWaveNet {hname} val MAE={masked_metrics(extra['gwn'][:, k].astype(np.float64), true[:, k])['MAE']:.3f}")
+    # sorties GO-FLOW (tools/export_goflow.py) + LightGBM qui les utilise (python -m src.run_lgbm --goflow)
+    gf_path = os.path.join(res, "goflow", "goflow_outputs.npz")
+    if dataset == "pems08" and os.path.exists(gf_path):
+        from src.run_lgbm import load_goflow
+        gf = load_goflow(dataset, values, gf_path)
+        t0 = xi_va[:, -1]
+        extra.update(gf_pred_occ15=gf["pred_occ15"][t0].astype(np.float32),
+                     gf_occupancy=gf["occupancy"][t0].astype(np.float32),
+                     gf_thresholds=str(np.load(gf_path)["thresholds"]))
+        if os.path.exists(os.path.join(models_dir, "LightGBM_goflow_15min.txt")):
+            lg_gf = np.zeros_like(lgbm)
+            for k, (hname, h) in enumerate(HORIZONS.items()):
+                model = lgb.Booster(model_file=os.path.join(models_dir, f"LightGBM_goflow_{hname}.txt"))
+                F, _ = build_features(Xva, xi_va, h, slot, dow, ha_feat, A_up, A_down, True, goflow=gf)
+                lg_gf[:, k] = model.predict(F).reshape(S, N)
+                print(f"LightGBM+GO-FLOW {hname} val MAE="
+                      f"{masked_metrics(lg_gf[:, k].astype(np.float64), Yva[:, h - 1])['MAE']:.3f}")
+            extra["lgbm_gf"] = lg_gf
     current = Xva[:, -1, :].astype(np.float32)  # vitesse observée à t0 (0 = manquant)
     np.savez_compressed(out, anchors=a_va, times=df.index[a_va].values.astype("datetime64[ns]"),
                         sensor_ids=np.array(sensor_ids), horizons=np.array(list(HORIZONS)),
@@ -64,4 +84,7 @@ def main(h5="data/metr-la.h5", adj_path="data/adj_mx.pkl", models_dir="results/m
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset", choices=sorted(DATASETS), default="metr-la")
+    main(ap.parse_args().dataset)

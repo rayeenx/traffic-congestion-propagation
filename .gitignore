@@ -6,3 +6,4 @@ data/*.h5
 data/*.pkl
 data/dcrnn_drive/
 results/TEST_OPENED.lock
+data/pems08/*.npz

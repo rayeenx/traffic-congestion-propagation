@@ -1,6 +1,6 @@
-"""Graph WaveNet sur METR-LA, même protocole que LightGBM : split chrono 70/10/20, fenêtres 12 -> 12 dans
+"""Graph WaveNet sur METR-LA ou PEMS08, même protocole que LightGBM : split chrono 70/10/20, fenêtres 12 -> 12 dans
 chaque bloc, scaler train-only (0 = manquant ignoré), loss et métriques masquées, early stopping sur la val.
-Le test n'est pas lu. Usage : python -m src.run_gwn [--graph real|random|adaptive] [--epochs 60]"""
+Le test n'est pas lu. Usage : python -m src.run_gwn [--dataset metr-la|pems08] [--graph real|random|adaptive] [--epochs 60]"""
 import argparse
 import json
 import os
@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from src.data import MaskedScaler, chrono_split, load_metr_la, time_features, window_anchors
+from src.data import DATASETS, MaskedScaler, dataset_splits, load_dataset, time_features, window_anchors
 from src.graphs import get_graph
 from src.gwn import GraphWaveNet, transition_matrices
 from src.leakage import check_scaler, check_splits
@@ -25,15 +25,15 @@ def masked_mae_loss(pred, true):
     return (torch.abs(pred - true) * m).mean()
 
 
-def main(h5, adj_path, out_dir, graph, epochs, batch, lr, patience, max_minutes):
+def main(h5, adj_path, out_dir, graph, epochs, batch, lr, patience, max_minutes, dataset="metr-la", eval_only=False):
     torch.manual_seed(SEED); np.random.seed(SEED)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     tag = "GraphWaveNet" + ("" if graph == "real" else f"_{graph}Graph")
     os.makedirs(os.path.join(out_dir, "models"), exist_ok=True)
-    df, adj, _ = load_metr_la(h5, adj_path)
+    df, adj, _ = load_dataset(dataset, h5, adj_path)
     values = df.values.astype(np.float32)
     T, N = values.shape
-    splits = chrono_split(T); check_splits(splits, T)
+    splits = dataset_splits(dataset, T); check_splits(splits, T)
     tr, va = splits[0], splits[1]
     scaler = MaskedScaler().fit(values[tr.start:tr.end]); check_scaler(scaler, values, tr)
     slot, _ = time_features(df.index)
@@ -76,7 +76,10 @@ def main(h5, adj_path, out_dir, graph, epochs, batch, lr, patience, max_minutes)
 
     best, best_ep, wait, hist, t0 = np.inf, -1, 0, [], time.time()
     ckpt = os.path.join(out_dir, "models", f"{tag}.pt")
-    for ep in range(epochs):
+    if eval_only:  # reprend le meilleur checkpoint déjà sauvegardé, sans réentraîner
+        assert os.path.exists(ckpt), f"pas de checkpoint {ckpt}"
+        print(f"[eval-only] évaluation de {ckpt}")
+    for ep in range(0 if eval_only else epochs):
         model.train()
         perm = a_tr[torch.randperm(len(a_tr), device=dev)]
         losses = []
@@ -113,15 +116,16 @@ def main(h5, adj_path, out_dir, graph, epochs, batch, lr, patience, max_minutes)
     pd.DataFrame(hist).to_csv(os.path.join(out_dir, f"{tag}_history.csv"), index=False)
     np.save(os.path.join(out_dir, "dashboard", f"{tag}_val_pred.npy"), pv.astype(np.float32))  # [S, 12, N]
     with open(os.path.join(out_dir, f"{tag}_config.json"), "w") as f:
-        json.dump(dict(graph=graph, epochs_run=len(hist), best_epoch=best_ep, batch=batch, lr=lr,
+        json.dump(dict(dataset=dataset, graph=graph, epochs_run=len(hist), best_epoch=best_ep, batch=batch, lr=lr,
                        patience=patience, seed=SEED, inputs=["speed_z (0 si manquant)", "time_of_day"]), f, indent=2)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--h5", default="data/metr-la.h5")
-    ap.add_argument("--adj", default="data/adj_mx.pkl")
-    ap.add_argument("--out", default="results")
+    ap.add_argument("--dataset", choices=sorted(DATASETS), default="metr-la")
+    ap.add_argument("--h5", default=None, help="fichier de données (défaut selon --dataset : .h5 ou .npz)")
+    ap.add_argument("--adj", default=None, help="graphe (défaut selon --dataset : adj_mx.pkl ou distance.csv)")
+    ap.add_argument("--out", default=None, help="dossier de résultats (défaut : results ou results/pems08)")
     ap.add_argument("--graph", choices=["real", "random", "adaptive"], default="real",
                     help="real : graphe routier + adaptatif ; random : graphe aléatoire + adaptatif ; adaptive : adaptatif seul")
     ap.add_argument("--epochs", type=int, default=60)
@@ -129,6 +133,8 @@ if __name__ == "__main__":
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--patience", type=int, default=10)
     ap.add_argument("--max-minutes", type=float, default=90)
+    ap.add_argument("--eval-only", action="store_true", help="évaluer le checkpoint existant sans réentraîner")
     a = ap.parse_args()
+    a.out = a.out or DATASETS[a.dataset]["out"]
     os.makedirs(os.path.join(a.out, "dashboard"), exist_ok=True)
-    main(a.h5, a.adj, a.out, a.graph, a.epochs, a.batch, a.lr, a.patience, a.max_minutes)
+    main(a.h5, a.adj, a.out, a.graph, a.epochs, a.batch, a.lr, a.patience, a.max_minutes, a.dataset, a.eval_only)

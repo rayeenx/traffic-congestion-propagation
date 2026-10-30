@@ -1,6 +1,6 @@
 """LightGBM sur lags du capteur + voisins amont/aval, un modèle par horizon (3, 6, 12 pas).
 Validation seulement (early stopping sur val -> chiffres val légèrement optimistes ; le test tranchera).
-Usage : python -m src.run_lgbm [--no-neighbors] [--train-stride 3]"""
+Usage : python -m src.run_lgbm [--dataset metr-la|pems08] [--no-neighbors] [--train-stride 3]"""
 import argparse
 import json
 import os
@@ -14,7 +14,7 @@ except ImportError:  # tracking optionnel
 import numpy as np
 import pandas as pd
 
-from src.data import chrono_split, load_metr_la, make_windows, time_features, window_anchors
+from src.data import DATASETS, dataset_splits, load_dataset, make_windows, time_features, window_anchors
 from src.graphs import get_graph
 from src.features import OOFHistoricalAverage, build_features, neighbor_mats
 from src.leakage import check_splits, check_windows
@@ -27,17 +27,28 @@ PARAMS = dict(objective="regression", metric="l1", learning_rate=0.05, num_leave
               seed=SEED, deterministic=True, force_row_wise=True, verbose=-1)
 
 
-def main(h5, adj_path, out_dir, use_neighbors, train_stride, graph="real"):
+def load_goflow(dataset, values, path=None):
+    """Sorties GO-FLOW (tools/export_goflow.py), alignées pas à pas sur nos données PEMS08."""
+    assert dataset == "pems08", "GO-FLOW n'existe que sur PEMS08"
+    g = np.load(path or os.path.join(DATASETS[dataset]["out"], "goflow", "goflow_outputs.npz"))
+    assert g["speed"].shape == values.shape and np.allclose(g["speed"], values, atol=1e-3), \
+        "CSV GO-FLOW et npz PEMS08 pas alignés"
+    return {k: g[k].astype(np.float64) for k in ("occupancy", "flow", "pred_occ15")}
+
+
+def main(h5, adj_path, out_dir, use_neighbors, train_stride, graph="real", dataset="metr-la", goflow=False):
     warnings.filterwarnings("ignore", category=RuntimeWarning)  # nanmean sur fenêtres vides -> NaN voulu
     np.random.seed(SEED)
-    tag = "LightGBM" + ("" if use_neighbors else "_noNeighbors") + ("" if graph == "real" or not use_neighbors else f"_{graph}Graph")
+    tag = "LightGBM" + ("" if use_neighbors else "_noNeighbors") + ("" if graph == "real" or not use_neighbors else f"_{graph}Graph") \
+        + ("_goflow" if goflow else "")
     os.makedirs(os.path.join(out_dir, "models"), exist_ok=True)
-    df, adj, _ = load_metr_la(h5, adj_path)
+    df, adj, _ = load_dataset(dataset, h5, adj_path)
     values = df.values.astype(np.float64)
     T, N = values.shape
-    splits = chrono_split(T); check_splits(splits, T)
+    splits = dataset_splits(dataset, T); check_splits(splits, T)
     tr, va = splits[0], splits[1]
     slot, dow = time_features(df.index)
+    gf = load_goflow(dataset, values) if goflow else None
     week = np.arange(T) // (7 * 288)
     ha_feat = OOFHistoricalAverage().fit(values[tr.start:tr.end], slot[tr.start:tr.end], dow[tr.start:tr.end],
                                          week[tr.start:tr.end])
@@ -53,13 +64,14 @@ def main(h5, adj_path, out_dir, use_neighbors, train_stride, graph="real"):
 
     if mlflow is not None:
         mlflow.set_tracking_uri("sqlite:///mlflow.db")  # mlflow ui --backend-store-uri sqlite:///mlflow.db
-        mlflow.set_experiment("dso4-metr-la")
+        mlflow.set_experiment(f"dso4-{dataset}")
         mlflow.start_run(run_name=tag)
-        mlflow.log_params({**PARAMS, "train_stride": train_stride, "use_neighbors": use_neighbors, "graph": graph, "split": "val"})
+        mlflow.log_params({**PARAMS, "train_stride": train_stride, "use_neighbors": use_neighbors, "graph": graph, "split": "val", "dataset": dataset, "goflow": goflow})
     rows, importances, shap_imp = [], {}, {}
     for hname, h in HORIZONS.items():
-        Ftr, names = build_features(Xtr, xi_tr, h, slot, dow, ha_feat, A_up, A_down, use_neighbors, week_all=week)
-        Fva, _ = build_features(Xva, xi_va, h, slot, dow, ha_feat, A_up, A_down, use_neighbors)
+        Ftr, names = build_features(Xtr, xi_tr, h, slot, dow, ha_feat, A_up, A_down, use_neighbors, week_all=week,
+                                    goflow=gf)
+        Fva, _ = build_features(Xva, xi_va, h, slot, dow, ha_feat, A_up, A_down, use_neighbors, goflow=gf)
         ytr, yva = Ytr[:, h - 1, :].reshape(-1), Yva[:, h - 1, :].reshape(-1)
         mtr, mva = ytr > 0, yva > 0                        # cibles manquantes exclues de l'entraînement
         cat = [names.index("sensor"), names.index("dow_target")]
@@ -85,7 +97,7 @@ def main(h5, adj_path, out_dir, use_neighbors, train_stride, graph="real"):
     res = pd.DataFrame(rows)
     res.to_csv(os.path.join(out_dir, f"{tag}_val.csv"), index=False)
     with open(os.path.join(out_dir, f"{tag}_config.json"), "w") as f:
-        json.dump(dict(params=PARAMS, train_stride=train_stride, use_neighbors=use_neighbors,
+        json.dump(dict(dataset=dataset, params=PARAMS, train_stride=train_stride, use_neighbors=use_neighbors,
                        importance_gain=importances), f, indent=2)
     imp = pd.DataFrame(importances); imp = (imp / imp.sum()).round(3).sort_values("60min", ascending=False)
     print("\nimportance (gain, normalisée), top 10 :\n", imp.head(10))
@@ -101,12 +113,16 @@ def main(h5, adj_path, out_dir, use_neighbors, train_stride, graph="real"):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--h5", default="data/metr-la.h5")
-    ap.add_argument("--adj", default="data/adj_mx.pkl")
-    ap.add_argument("--out", default="results")
+    ap.add_argument("--dataset", choices=sorted(DATASETS), default="metr-la")
+    ap.add_argument("--h5", default=None, help="fichier de données (défaut selon --dataset : .h5 ou .npz)")
+    ap.add_argument("--adj", default=None, help="graphe (défaut selon --dataset : adj_mx.pkl ou distance.csv)")
+    ap.add_argument("--out", default=None, help="dossier de résultats (défaut : results ou results/pems08)")
     ap.add_argument("--no-neighbors", action="store_true")
     ap.add_argument("--graph", choices=["real", "random", "none"], default="real",
                     help="ablation : vrai graphe, aléatoire même densité, ou aucune arête")
+    ap.add_argument("--goflow", action="store_true",
+                    help="PEMS08 : ajoute en entrée les sorties GO-FLOW (python tools/export_goflow.py d'abord)")
     ap.add_argument("--train-stride", type=int, default=3, help="1 fenêtre train sur k (mémoire)")
     a = ap.parse_args()
-    main(a.h5, a.adj, a.out, not a.no_neighbors, a.train_stride, a.graph)
+    a.out = a.out or DATASETS[a.dataset]["out"]
+    main(a.h5, a.adj, a.out, not a.no_neighbors, a.train_stride, a.graph, a.dataset, a.goflow)

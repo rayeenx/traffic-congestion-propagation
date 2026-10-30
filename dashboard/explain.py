@@ -43,7 +43,9 @@ def _table(contrib, values, top=8):
 
 def build_prompt(ctx, contrib, values, base):
     neigh = contrib[[c for c in contrib.index if c.startswith(("up_", "down_"))]].sum()
-    return f"""Contexte : projet de prévision du trafic sur METR-LA (207 capteurs d'autoroute à Los Angeles, vitesses en mph).
+    from src.data import DATASETS, active_dataset
+    ds = DATASETS[active_dataset()]
+    return f"""Contexte : projet de prévision du trafic sur {ds['label']} (capteurs d'autoroute à {ds['city']}, vitesses en mph).
 Un modèle LightGBM prédit la vitesse d'un capteur {ctx['horizon']} à l'avance. Le graphique SHAP montre, pour CETTE
 prédiction, combien chaque variable a poussé la vitesse prédite vers le haut (+) ou vers le bas (-) par rapport à la
 valeur moyenne du modèle.

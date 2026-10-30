@@ -44,8 +44,18 @@ class OOFHistoricalAverage:
         return out
 
 
-def build_features(X, x_idx, h, slot, dow, ha_feat, A_up, A_down, use_neighbors=True, week_all=None):
-    """X [S, 12, N] vitesses brutes. h = horizon en pas (1..12). Retourne (F [S*N, d], noms)."""
+def nan_neighbor_mean(V, A):
+    """V [S, N] (NaN = manquant, 0 est une vraie valeur) -> moyenne pondérée des voisins [S, N]."""
+    valid = np.isfinite(V).astype(np.float64)
+    num, den = np.nan_to_num(V) @ A, valid @ A
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(den > 0, num / den, np.nan)
+
+
+def build_features(X, x_idx, h, slot, dow, ha_feat, A_up, A_down, use_neighbors=True, week_all=None, goflow=None):
+    """X [S, 12, N] vitesses brutes. h = horizon en pas (1..12). Retourne (F [S*N, d], noms).
+    goflow : sorties GO-FLOW {nom: [T, N]} (tools/export_goflow.py), lues à t0 seulement (causal) :
+    occupation et débit mesurés, et sa prévision d'occupation à +15 min, pour le capteur et ses voisins."""
     S, L, N = X.shape
     t0 = x_idx[:, -1]
     tgt = t0 + h
@@ -62,6 +72,13 @@ def build_features(X, x_idx, h, slot, dow, ha_feat, A_up, A_down, use_neighbors=
             cols.append(down[:, L - 1 - lag, :]); names.append(f"down_lag{lag}")
         cols.append(np.nanmean(up, axis=1)); names.append("up_mean12")
         cols.append(np.nanmean(down, axis=1)); names.append("down_mean12")
+    if goflow is not None:
+        for name in ("occupancy", "flow", "pred_occ15"):
+            cols.append(goflow[name][t0]); names.append(f"gf_{name}")
+        p = goflow["pred_occ15"][t0]
+        cols.append(p - goflow["occupancy"][t0]); names.append("gf_occ_change15")   # hausse prévue par GO-FLOW
+        cols.append(nan_neighbor_mean(p, A_up)); names.append("gf_pred_occ15_up")
+        cols.append(nan_neighbor_mean(p, A_down)); names.append("gf_pred_occ15_down")
     ha = ha_feat.predict(tgt, slot, dow, week_all).reshape(S, N)
     cols.append(ha); names.append("ha_target")
     cols.append(np.repeat(slot[tgt][:, None], N, 1)); names.append("slot_target")

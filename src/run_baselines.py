@@ -1,5 +1,5 @@
 """Étape 1 : baselines HA et last value sous le protocole DSO4.
-Usage : python -m src.run_baselines --h5 data/metr-la.h5 --adj data/adj_mx.pkl [--open-test]"""
+Usage : python -m src.run_baselines [--dataset metr-la|pems08] [--open-test]"""
 import argparse
 import json
 import os
@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.baselines import HistoricalAverage, last_value
-from src.data import MaskedScaler, chrono_split, load_metr_la, make_windows, time_features, window_anchors
+from src.data import DATASETS, MaskedScaler, dataset_splits, load_dataset, make_windows, time_features, window_anchors
 from src.leakage import TestGuard, check_index_time, check_scaler, check_splits, check_windows
 from src.metrics import horizon_table
 
@@ -16,10 +16,10 @@ SEED = 42
 N_IN, N_OUT = 12, 12
 
 
-def main(h5, adj_path, out_dir, open_test):
+def main(h5, adj_path, out_dir, open_test, dataset="metr-la"):
     np.random.seed(SEED)
     os.makedirs(out_dir, exist_ok=True)
-    df, adj, ids = load_metr_la(h5, adj_path)
+    df, adj, ids = load_dataset(dataset, h5, adj_path)
     values = df.values.astype(np.float64)
     T, N = values.shape
     print(f"données : T={T} pas, N={N} capteurs, {df.index[0]} -> {df.index[-1]}")
@@ -27,7 +27,7 @@ def main(h5, adj_path, out_dir, open_test):
     print(f"graphe : {int((adj > 0).sum())} entrées non nulles (dont {int((np.diag(adj) > 0).sum())} sur la diagonale), "
           f"symétrique={np.allclose(adj, adj.T)}")
 
-    splits = chrono_split(T)
+    splits = dataset_splits(dataset, T)
     check_splits(splits, T)
     check_index_time(df.index, splits)
     train = splits[0]
@@ -65,7 +65,7 @@ def main(h5, adj_path, out_dir, open_test):
     res = pd.DataFrame(rows)
     res.to_csv(os.path.join(out_dir, f"baselines_{'_'.join(eval_splits)}.csv"), index=False)
     with open(os.path.join(out_dir, "baselines_config.json"), "w") as f:
-        json.dump(dict(seed=SEED, n_in=N_IN, n_out=N_OUT, ratios=[0.7, 0.1, 0.2],
+        json.dump(dict(dataset=dataset, seed=SEED, n_in=N_IN, n_out=N_OUT,
                        scaler=dict(mean=scaler.mean, std=scaler.std),
                        splits={s.name: [s.start, s.end] for s in splits}), f, indent=2)
     pd.set_option("display.precision", 3); pd.set_option("display.width", 250); pd.set_option("display.max_columns", None)
@@ -76,9 +76,11 @@ def main(h5, adj_path, out_dir, open_test):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--h5", default="data/metr-la.h5")
-    ap.add_argument("--adj", default="data/adj_mx.pkl")
-    ap.add_argument("--out", default="results")
+    ap.add_argument("--dataset", choices=sorted(DATASETS), default="metr-la")
+    ap.add_argument("--h5", default=None, help="fichier de données (défaut selon --dataset : .h5 ou .npz)")
+    ap.add_argument("--adj", default=None, help="graphe (défaut selon --dataset : adj_mx.pkl ou distance.csv)")
+    ap.add_argument("--out", default=None, help="dossier de résultats (défaut : results ou results/pems08)")
     ap.add_argument("--open-test", action="store_true")
     a = ap.parse_args()
-    main(a.h5, a.adj, a.out, a.open_test)
+    a.out = a.out or DATASETS[a.dataset]["out"]
+    main(a.h5, a.adj, a.out, a.open_test, a.dataset)

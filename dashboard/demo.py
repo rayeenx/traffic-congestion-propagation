@@ -30,12 +30,17 @@ def valid_days(d):
     return [dd for dd, n in counts.items() if n >= 144 and dd.dayofweek < 5 and dd != pd.Timestamp("2012-05-28")]
 
 
+def _city():
+    from src.data import DATASETS, active_dataset
+    return DATASETS[active_dataset()]["city"]
+
+
 def render(d, agent, loc, hname, tiles):
     times = pd.to_datetime(d["times"])
 
     st.markdown(
         f"### Ce que fait l'agent, en une phrase\n"
-        f"Toutes les 5 minutes, il regarde les 207 capteurs de Los Angeles, **prévoit où il y aura un bouchon dans "
+        f"Toutes les 5 minutes, il regarde les {len(d['sensor_ids'])} capteurs de {_city()}, **prévoit où il y aura un bouchon dans "
         f"{hname.replace('min', ' min')}**, et **lance une alerte avant que le bouchon arrive**, en particulier quand "
         f"un voisin sur la route est déjà bloqué (la congestion se propage).")
 
@@ -49,8 +54,8 @@ def render(d, agent, loc, hname, tiles):
                 unsafe_allow_html=True)
 
     fig, fig2, msg = build_figs(d, agent, loc, day, hname, tiles)
-    st.plotly_chart(fig, use_container_width=True)
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig2, width="stretch")
     st.info(msg + " Si la courbe violette suit la rouge, c'est que l'agent voit venir les bouchons en avance.")
 
 

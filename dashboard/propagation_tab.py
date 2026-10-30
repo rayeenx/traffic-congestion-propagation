@@ -29,6 +29,10 @@ def get_episode(_d, _adj, _loc, day, periode):
     return episode(_d, _adj, _loc, day + pd.Timedelta(hours=h0), day + pd.Timedelta(hours=h1))
 
 
+def _kmh(v):
+    return f"{v:.1f} km/h" if np.isfinite(v) else "n/a (pas de GPS)"
+
+
 def render(d, adj, loc, agent, days, tiles):
     sids = d["sensor_ids"]
     st.markdown("### D'où vient le bouchon, et comment il se propage ?\n"
@@ -53,7 +57,7 @@ def render(d, adj, loc, agent, days, tiles):
     if len(edges):
         up = (edges.sens == "remonte (amont)").mean()
         m3.metric("Liens qui remontent la route", f"{up:.0%}", help="le bouchon va dans le sens inverse de la circulation")
-        m4.metric("Vitesse de l'onde (médiane)", f"{edges.speed_kmh.median():.1f} km/h",
+        m4.metric("Vitesse de l'onde (médiane)", _kmh(edges.speed_kmh.median()),
                   help="distance à vol d'oiseau / écart de temps : sous-estime la vitesse réelle")
 
     # ---- carte : couleur = heure de début du bouchon, traits = propagation ----
@@ -89,7 +93,7 @@ def render(d, adj, loc, agent, days, tiles):
         fig.update_yaxes(scaleanchor="x", scaleratio=1 / np.cos(np.radians(34.1)), visible=False)
         fig.update_xaxes(visible=False)
         fig.update_layout(plot_bgcolor="#f4f4f4")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.caption("Couleur = minutes après le premier capteur touché (foncé = tôt). Trait violet = le bouchon est passé "
                "de ce voisin à ce capteur. Cercle bleu = origine d'un bouchon qui a touché au moins 3 capteurs.")
 
@@ -101,7 +105,7 @@ def render(d, adj, loc, agent, days, tiles):
     g1.metric("Le bouchon remonte la route", f"{vc.get('remonte (amont)', 0):.0%}",
               help=f"descend : {vc.get('descend (aval)', 0):.0%} · double sens : {vc.get('double sens', 0):.0%} "
                    f"({len(E)} liens de propagation)")
-    g2.metric("Vitesse de l'onde (médiane)", f"{E.speed_kmh.median():.1f} km/h",
+    g2.metric("Vitesse de l'onde (médiane)", _kmh(E.speed_kmh.median()),
               help=f"moitié des liens entre {E.speed_kmh.quantile(.25):.1f} et {E.speed_kmh.quantile(.75):.1f} km/h")
     g3.metric("Bouchons annoncés par l'agent", f"{L.alerted.mean():.0%}",
               help=f"{int(L.alerted.sum())} sur {len(L)} débuts de bouchon réels ont eu une alerte dans l'heure d'avant")
@@ -115,7 +119,7 @@ def render(d, adj, loc, agent, days, tiles):
                         color_discrete_sequence=["#7b2cbf"])
     fig2.update_layout(margin=dict(l=0, r=0, t=30, b=0), yaxis_title="nombre de bouchons",
                        title="Combien de minutes avant le bouchon l'agent a alerté")
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
     st.caption("Limites : la vitesse de l'onde utilise la distance à vol d'oiseau (plus courte que la route), donc elle "
                "est sous-estimée. L'agent n'alerte que les capteurs encore fluides : un bouchon précédé d'un "
                f"ralentissement n'est pas compté comme annoncé, d'où {L.alerted.mean():.0%} seulement.")

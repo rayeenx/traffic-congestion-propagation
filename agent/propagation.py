@@ -55,7 +55,8 @@ def episode(d, adj, loc, start, end, max_gap=6):
     for s, p in parent.items():
         up, down = bool(A[s, p]), bool(A[p, s])
         sens = "remonte (amont)" if up and not down else ("descend (aval)" if down and not up else "double sens")
-        dist = float(haversine_km(lat[p], lon[p], lat[s], lon[s]))
+        # sans GPS (PEMS08, schéma du réseau), pas de distance réelle : vitesse de l'onde non calculée
+        dist = np.nan if "schematic" in loc else float(haversine_km(lat[p], lon[p], lat[s], lon[s]))
         dt_min = (onset[s] - onset[p]) * 5
         edges.append(dict(parent=int(p), child=int(s), dist_km=dist, dt_min=dt_min,
                           speed_kmh=dist / (dt_min / 60), sens=sens))

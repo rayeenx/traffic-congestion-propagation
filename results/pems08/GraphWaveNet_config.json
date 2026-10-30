@@ -1,0 +1,14 @@
+{
+  "dataset": "pems08",
+  "graph": "real",
+  "epochs_run": 0,
+  "best_epoch": -1,
+  "batch": 64,
+  "lr": 0.001,
+  "patience": 10,
+  "seed": 42,
+  "inputs": [
+    "speed_z (0 si manquant)",
+    "time_of_day"
+  ]
+}
